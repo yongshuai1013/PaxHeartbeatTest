@@ -11,12 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Build patched IDevice xcframework (FORENSICS)
+      - name: Build patched IDevice xcframework (UPSTREAM 0.1.66 + FORENSICS)
         run: |
-          # 死點鑑識版專用：從源碼構建打了鑑識補丁的 idevice（取代官方預編包）
+          # 源頭版鑑識：idevice 改用上游 jkcoxson/idevice v0.1.66（版本血緣單變量對照）
           # 補丁：不改任何收發行為，只逐連線記錄每筆 lockdown/AFC 交換
           # （步驟／字節／毫秒／死點），經 FFI callback 送進 App 日誌畫面
-          git clone --depth 1 --branch v0.1.68-ss-3e55c84 https://github.com/SideStore/idevice.git /tmp/idevice-src
+          git clone --depth 1 --branch v0.1.66 https://github.com/jkcoxson/idevice.git /tmp/idevice-src
           git -C /tmp/idevice-src apply "$GITHUB_WORKSPACE/patches/idevice-forensics.patch"
           echo "FORENSICS markers in patched lib.rs:"
           grep -c "FORENSICS" /tmp/idevice-src/idevice/src/lib.rs

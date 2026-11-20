@@ -46,7 +46,7 @@ struct ContentView: View {
                 Text("PaxHeartbeatTest")
                     .font(.title)
                     .padding(.top)
-                Text("FORENSICS ON")
+                Text("UPSTREAM 0.1.66 + FORENSICS")
                     .font(.caption)
                     .bold()
                     .foregroundColor(.red)
@@ -201,7 +201,7 @@ struct ContentView: View {
                 // FORENSICS：註冊 idevice 鑑識紀錄橋（每筆交換即時進日誌畫面）
                 FxLogRelay.shared.handler = { msg in appendLog(msg) }
                 idevice_forensics_set_callback(ideviceForensicsLine)
-                appendLog("=== FORENSICS ON（死點鑑識版）===")
+                appendLog("=== UPSTREAM 0.1.66 + FORENSICS（源頭版鑑識）===")
                 // App 打開時，如果已有配對檔，自動啟動常駐心跳
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                 let pairingURL = docs.appendingPathComponent("PairingFiles/PairingFile_Lockdown.plist")

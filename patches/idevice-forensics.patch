@@ -26,7 +26,7 @@ index 0000000..e0a2c55
 +    idevice::forensics::set_callback(callback);
 +}
 diff --git a/ffi/src/lib.rs b/ffi/src/lib.rs
-index 1837e76..5444bfe 100644
+index 813479b..808b398 100644
 --- a/ffi/src/lib.rs
 +++ b/ffi/src/lib.rs
 @@ -37,6 +37,7 @@ pub mod installcoordination_proxy;
