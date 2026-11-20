@@ -85,6 +85,10 @@ final class MinimuxerInstaller {
         log("M < start OK @\(ms())ms")
 
         // 解壓 IPA（同按鈕 5／AppInstaller 的流程：ZIPFoundation 逐 entry 展開，取 Payload/*.app）
+        // 自檢：extract 前先記存在與大小，Archive 打不開時錯誤要帶路徑與這兩個值，不要再只有「無法打開 IPA」
+        let ipaExists = FileManager.default.fileExists(atPath: ipaURL.path)
+        let ipaSize = (try? FileManager.default.attributesOfItem(atPath: ipaURL.path))?[.size] as? NSNumber
+        log("M > extract ipa size=\(ipaSize?.int64Value ?? -1) exists=\(ipaExists) path=\(ipaURL.path)")
         log("M > extract ipa")
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let appLocalURL: URL
@@ -93,7 +97,7 @@ final class MinimuxerInstaller {
         do {
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             guard let archive = Archive(url: ipaURL, accessMode: .read) else {
-                throw InstallerError.afcFailed("無法打開 IPA")
+                throw InstallerError.afcFailed("無法打開 IPA path=\(ipaURL.path) exists=\(ipaExists) size=\(ipaSize?.int64Value ?? -1)")
             }
             for entry in archive {
                 let dest = tempDir.appendingPathComponent(entry.path)

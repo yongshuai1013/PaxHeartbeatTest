@@ -323,8 +323,21 @@ struct ContentView: View {
             }
             .sheet(isPresented: $showIPAPicker) {
                 DocumentPicker(contentTypes: [.data]) { url in
-                    selectedIPA = url
-                    appendLog("已選擇 IPA: \(url.lastPathComponent)")
+                    // 先複製進 App 容器再存容器 URL（照配對檔的形狀）：
+                    // 挑選器給的 URL 是外部位置的參照，事後 Archive 直接開會打不開
+                    let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                    let dir = docs.appendingPathComponent("IPAInput")
+                    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    let dest = dir.appendingPathComponent(url.lastPathComponent)
+                    try? FileManager.default.removeItem(at: dest)
+                    do {
+                        try FileManager.default.copyItem(at: url, to: dest)
+                        selectedIPA = dest
+                        appendLog("已選擇 IPA: \(url.lastPathComponent)")
+                        appendLog("✅ 已複製到 IPAInput/")
+                    } catch {
+                        appendLog("❌ 複製 IPA 失敗: \(error)")
+                    }
                 }
             }
             .sheet(isPresented: $showPairingPicker) {
