@@ -77,7 +77,7 @@ struct ContentView: View {
                 Text("PaxHeartbeatTest")
                     .font(.title)
                     .padding(.top)
-                Text("PROBE MATRIX + LOG UI + MINIMUXER")
+                Text("PROBE MATRIX + LOG UI + MINIMUXER + MINIMUXER INSTALL")
                     .font(.caption)
                     .bold()
                     .foregroundColor(.red)
@@ -222,6 +222,18 @@ struct ContentView: View {
                 .padding(.horizontal)
                 .disabled(isTesting)
 
+                // 9. AFC 安裝（minimuxer 連線層；按鈕 5 的 idevice 直連版保留作對照）
+                Button(action: installViaMinimuxer) {
+                    Text("9. AFC 安裝（minimuxer）")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.indigo)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+                .padding(.horizontal)
+                .disabled(isTesting || selectedIPA == nil)
+
                 // 詳細日誌入口（完整逐筆）
                 NavigationLink(destination: LogDetailView(store: logStore)) {
                     Text("詳細日誌（完整逐筆）")
@@ -267,7 +279,7 @@ struct ContentView: View {
                 // FORENSICS：註冊 idevice 鑑識紀錄橋（每筆交換即時進日誌畫面）
                 FxLogRelay.shared.handler = { msg in appendLog(msg) }
                 idevice_forensics_set_callback(ideviceForensicsLine)
-                appendLog("=== MINIMUXER MODE（minimuxer 模式判別版）===")
+                appendLog("=== MINIMUXER MODE + MINIMUXER INSTALL（minimuxer 判別版）===")
                 // App 打開時，如果已有配對檔，自動啟動常駐心跳
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                 let pairingURL = docs.appendingPathComponent("PairingFiles/PairingFile_Lockdown.plist")
@@ -442,6 +454,22 @@ struct ContentView: View {
                 DispatchQueue.main.async { appendLog(msg) }
             }
             DispatchQueue.main.async { isTesting = false }
+        }
+    }
+
+    private func installViaMinimuxer() {
+        guard let ipaURL = selectedIPA else {
+            appendLog("❌ 請先選擇 IPA 文件")
+            return
+        }
+        guard !isTesting else { return }
+        isTesting = true
+        appendLog("minimuxer 安裝啟動（安裝鏈改走 minimuxer 連線層）")
+        Task {
+            await MinimuxerInstaller.shared.install(ipaURL: ipaURL) { msg in
+                DispatchQueue.main.async { appendLog(msg) }
+            }
+            await MainActor.run { isTesting = false }
         }
     }
 
