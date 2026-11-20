@@ -109,7 +109,7 @@ final class SelfUsbmuxdTester {
                 }
                 if soErr != 0 { throw UFail(step: "OPEN", text: errnoText(soErr)) }
             } else {
-                throw UFail(step: "OPEN", text: errnoText(errno)))
+                throw UFail(step: "OPEN", text: errnoText(errno))
             }
         }
         log("U OPEN \(host):\(port) @\(ms())ms")
