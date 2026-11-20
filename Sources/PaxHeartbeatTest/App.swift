@@ -19,9 +19,11 @@ final class FxLogRelay {
     func deliver(_ text: String) { handler?(text) }
 }
 
-/// 日誌雙層儲存：full 收全量逐筆（一字不漏，詳細頁與匯出用）；
-/// summary 只收摘要行（主頁用）——按鈕操作、進度、✅/❌ 結論、連線 OPEN／X（死亡）／CLOSE、
+/// 日誌雙層儲存：full 收全量逐筆（一字不漏，主頁、詳細頁與匯出共用同一份）；
+/// summary 只收摘要行——按鈕操作、進度、✅/❌ 結論、連線 OPEN／X（死亡）／CLOSE、
 /// 探針標題與 OK 結論；逐筆的 >（送出）／<（回覆）明細行只進 full。
+/// 註：主頁自 LOG UI 版一度綁 summary，用戶 2026-11-20 下令改回綁 full 全量
+/// （LOG UI 改版前的樣式：整頁逐筆、整頁滾動）；summary 過濾保留備用，主頁不再使用。
 final class LogStore: ObservableObject {
     @Published private(set) var summary = ""
     @Published private(set) var full = ""
@@ -34,9 +36,9 @@ final class LogStore: ObservableObject {
         }
     }
 
-    /// C 行（鑑識）與 P 行（探針）的逐筆明細不上主頁；其餘皆摘要。
-    /// M 行（minimuxer 模式）比照辦理：M > ／M < 步驟明細只進詳細頁，
-    /// M OPEN／M X 與 ✅/❌ 結論行留主頁。
+    /// C 行（鑑識）與 P 行（探針）的逐筆明細不進 summary；其餘皆摘要。
+    /// M 行（minimuxer 模式）比照辦理：M > ／M < 步驟明細只進 full，
+    /// M OPEN／M X 與 ✅/❌ 結論行另進 summary。（主頁現綁 full，此過濾僅備用）
     static func isSummaryLine(_ msg: String) -> Bool {
         if msg.range(of: "^[CP][0-9]+ [><]", options: .regularExpression) != nil {
             return false
@@ -231,9 +233,9 @@ struct ContentView: View {
                 }
                 .padding(.horizontal)
 
-                // 日誌輸出（摘要：逐筆 > < 明細只在詳細頁）
+                // 日誌輸出（全量逐筆直接顯示，整頁滾動；詳細頁另有同一份＋下載）
                 HStack {
-                    Text("日誌（摘要）")
+                    Text("日誌")
                         .font(.headline)
                     Spacer()
                     Toggle("自動滾動", isOn: $autoScrollLog)
@@ -241,7 +243,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal)
                 // 日誌全文展開、整頁可滾動（不再用固定高度的框截斷下方日誌）
-                Text(logStore.summary)
+                Text(logStore.full)
                     .font(.system(.caption, design: .monospaced))
                     .frame(maxWidth: .infinity, minHeight: 200, alignment: .topLeading)
                     .padding()
@@ -252,7 +254,7 @@ struct ContentView: View {
                     .frame(height: 1)
                     .id("logBottom")
             }
-            .onChange(of: logStore.summary) { _ in
+            .onChange(of: logStore.full) { _ in
                 if autoScrollLog {
                     proxy.scrollTo("logBottom", anchor: .bottom)
                 }
