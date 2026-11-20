@@ -27,18 +27,25 @@ jobs:
             IPHONEOS_DEPLOYMENT_TARGET=17.0 \
             cargo build --release --target aarch64-apple-ios --features obfuscate
           ls -lh /tmp/idevice-src/target/aarch64-apple-ios/release/libidevice_ffi.a
-          mkdir -p /tmp/idevice-headers
-          cp /tmp/idevice-src/ffi/idevice.h /tmp/idevice-headers/
-          cp /tmp/idevice-src/swift/include/module.modulemap /tmp/idevice-headers/
-          # MINIMUXER 共存：minimuxer 套件自帶的 IDevice.xcframework 也是 clang module "IDevice"，
-          # 我方模組改名 IDeviceFFI 避免同名模組衝突（僅改 modulemap 名，標頭與行為不動）
-          sed -i '' 's/^module IDevice {/module IDeviceFFI {/' /tmp/idevice-headers/module.modulemap
-          grep "^module" /tmp/idevice-headers/module.modulemap
+          # MINIMUXER 共存：我方 xcframework 包成 framework 形式（IDeviceFFI.framework），理由有二：
+          # (1) minimuxer 套件自帶的 IDevice.xcframework 也是 clang module "IDevice"，
+          #     我方 module 改名 IDeviceFFI（App 端 import IDeviceFFI）避免同名模組衝突；
+          # (2) library 形式 xcframework 的處理輸出是攤平的 libidevice_ffi.a + include/idevice.h
+          #     + include/module.modulemap，兩份 idevice 檔名全同會在 XCBuild 撞
+          #     "Multiple commands produce"（run 44759600230 實證）；framework 形式自成一包不攤平。
+          # （0.6.4 本體只有套件那一份 idevice，無此共存問題。）
+          FW=/tmp/IDeviceFFI.framework
+          rm -rf "$FW"
+          mkdir -p "$FW/Headers" "$FW/Modules"
+          cp /tmp/idevice-src/target/aarch64-apple-ios/release/libidevice_ffi.a "$FW/IDeviceFFI"
+          cp /tmp/idevice-src/ffi/idevice.h "$FW/Headers/"
+          printf 'framework module IDeviceFFI {\n  header "idevice.h"\n  export *\n}\n' > "$FW/Modules/module.modulemap"
+          printf '%s' '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundlePackageType</key><string>FMWK</string><key>CFBundleExecutable</key><string>IDeviceFFI</string><key>CFBundleIdentifier</key><string>com.pax.ideviceffi</string><key>CFBundleName</key><string>IDeviceFFI</string><key>CFBundleShortVersionString</key><string>1.0</string><key>CFBundleVersion</key><string>1</string></dict></plist>' > "$FW/Info.plist"
+          grep "module" "$FW/Modules/module.modulemap"
           mkdir -p "$GITHUB_WORKSPACE/Libraries"
           rm -rf "$GITHUB_WORKSPACE/Libraries/IDeviceFFI.xcframework"
           xcodebuild -create-xcframework \
-            -library /tmp/idevice-src/target/aarch64-apple-ios/release/libidevice_ffi.a \
-            -headers /tmp/idevice-headers \
+            -framework "$FW" \
             -output "$GITHUB_WORKSPACE/Libraries/IDeviceFFI.xcframework"
           ls -R "$GITHUB_WORKSPACE/Libraries/IDeviceFFI.xcframework"
       
