@@ -1,0 +1,57 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download IDevice xcframework (SideStore prebuilt)
+        run: |
+          # 直接用 SideStore/idevice 的預編包（跟 minimuxer 同源）
+          # https://github.com/SideStore/idevice/releases/download/v0.1.68-ss-3e55c84/idevice-xcframework-v0.1.68-ss-3e55c84.zip
+          mkdir -p /tmp/idevice_dl
+          curl -L -o /tmp/idevice_dl/idevice.zip "https://github.com/SideStore/idevice/releases/download/v0.1.68-ss-3e55c84/idevice-xcframework-v0.1.68-ss-3e55c84.zip"
+          mkdir -p Libraries
+          unzip -q -o /tmp/idevice_dl/idevice.zip -d /tmp/idevice_dl/
+          echo "=== Zip contents ==="
+          ls -R /tmp/idevice_dl/ | head -30
+          # 找到 xcframework（名字可能不同）
+          XCFRAMEWORK=$(find /tmp/idevice_dl -name "*.xcframework" -type d | head -1)
+          echo "Found: $XCFRAMEWORK"
+          rm -rf Libraries/IDeviceFFI.xcframework
+          cp -R "$XCFRAMEWORK" Libraries/IDeviceFFI.xcframework
+          ls -lh Libraries/IDeviceFFI.xcframework/
+      
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      
+      - name: Generate project
+        run: xcodegen generate
+      
+      - name: Build IPA
+        run: |
+          xcodebuild archive \
+            -project PaxHeartbeatTest.xcodeproj \
+            -scheme PaxHeartbeatTest \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/PaxHeartbeatTest.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            SKIP_INSTALL=NO
+          
+          # 手動打包 IPA（未簽名，TrollStore 可裝）
+          mkdir -p build/Payload
+          cp -R build/PaxHeartbeatTest.xcarchive/Products/Applications/PaxHeartbeatTest.app build/Payload/
+          cd build && zip -r PaxHeartbeatTest.ipa Payload/
+      
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: PaxHeartbeatTest-ipa
+          path: build/PaxHeartbeatTest.ipa
