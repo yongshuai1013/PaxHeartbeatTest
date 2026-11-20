@@ -1,6 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
-import IDevice
+import IDeviceFFI
 
 /// FORENSICS 橋接：idevice 核心的每筆交換紀錄經 FFI callback 進到這裡，
 /// 再轉交 FxLogRelay 送進 App 的日誌畫面（appendLog）。
@@ -35,8 +35,13 @@ final class LogStore: ObservableObject {
     }
 
     /// C 行（鑑識）與 P 行（探針）的逐筆明細不上主頁；其餘皆摘要。
+    /// M 行（minimuxer 模式）比照辦理：M > ／M < 步驟明細只進詳細頁，
+    /// M OPEN／M X 與 ✅/❌ 結論行留主頁。
     static func isSummaryLine(_ msg: String) -> Bool {
         if msg.range(of: "^[CP][0-9]+ [><]", options: .regularExpression) != nil {
+            return false
+        }
+        if msg.range(of: "^M [><]", options: .regularExpression) != nil {
             return false
         }
         return true
@@ -70,7 +75,7 @@ struct ContentView: View {
                 Text("PaxHeartbeatTest")
                     .font(.title)
                     .padding(.top)
-                Text("PROBE MATRIX + LOG UI")
+                Text("PROBE MATRIX + LOG UI + MINIMUXER")
                     .font(.caption)
                     .bold()
                     .foregroundColor(.red)
@@ -203,6 +208,18 @@ struct ContentView: View {
                 .padding(.horizontal)
                 .disabled(isTesting)
 
+                // 8. minimuxer 模式 GetValue（0.6.4 本體的 minimuxer 連線層）
+                Button(action: runMinimuxerMode) {
+                    Text("8. minimuxer 模式 GetValue")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.indigo)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+                .padding(.horizontal)
+                .disabled(isTesting)
+
                 // 詳細日誌入口（完整逐筆）
                 NavigationLink(destination: LogDetailView(store: logStore)) {
                     Text("詳細日誌（完整逐筆）")
@@ -248,7 +265,7 @@ struct ContentView: View {
                 // FORENSICS：註冊 idevice 鑑識紀錄橋（每筆交換即時進日誌畫面）
                 FxLogRelay.shared.handler = { msg in appendLog(msg) }
                 idevice_forensics_set_callback(ideviceForensicsLine)
-                appendLog("=== PROBE MATRIX + LOG UI（探針矩陣＋日誌分頁版）===")
+                appendLog("=== MINIMUXER MODE（minimuxer 模式判別版）===")
                 // App 打開時，如果已有配對檔，自動啟動常駐心跳
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                 let pairingURL = docs.appendingPathComponent("PairingFiles/PairingFile_Lockdown.plist")
@@ -423,6 +440,18 @@ struct ContentView: View {
                 DispatchQueue.main.async { appendLog(msg) }
             }
             DispatchQueue.main.async { isTesting = false }
+        }
+    }
+
+    private func runMinimuxerMode() {
+        guard !isTesting else { return }
+        isTesting = true
+        appendLog("minimuxer 模式啟動（0.6.4 本體連線層）")
+        Task {
+            await MinimuxerModeTester.shared.run { msg in
+                DispatchQueue.main.async { appendLog(msg) }
+            }
+            await MainActor.run { isTesting = false }
         }
     }
 

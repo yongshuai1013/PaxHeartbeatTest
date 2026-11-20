@@ -1,5 +1,5 @@
 import Foundation
-import IDevice
+import IDeviceFFI
 
 /// 用 SideStore/idevice Rust FFI 實現的 AFC 客戶端（真實現）
 /// 經 Provider 直連，Rust 內部處理 StartService

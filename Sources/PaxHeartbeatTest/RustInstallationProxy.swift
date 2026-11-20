@@ -1,5 +1,5 @@
 import Foundation
-import IDevice
+import IDeviceFFI
 
 /// 用 SideStore/idevice Rust FFI 實現的 InstallationProxy（真實現）
 public class RustInstallationProxy {

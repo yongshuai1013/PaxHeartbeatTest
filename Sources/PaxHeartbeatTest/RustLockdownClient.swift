@@ -1,5 +1,5 @@
 import Foundation
-import IDevice
+import IDeviceFFI
 
 /// 用 Rust FFI 實現的 Lockdown 客戶端（真實現，無假代碼）
 public class RustLockdownClient {

@@ -15,6 +15,8 @@ packages:
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation.git
     from: 0.9.0
+  minimuxer:
+    path: Dependencies/minimuxer
 
 targets:
   PaxHeartbeatTest:
@@ -31,11 +33,13 @@ targets:
         product: ZIPFoundation
       - framework: Libraries/IDeviceFFI.xcframework
         embed: false
+      - package: minimuxer
+        product: Minimuxer
     info:
       path: Sources/Info.plist
       properties:
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "6"
+        CFBundleVersion: "7"
         UILaunchScreen: {}
         UIBackgroundModes:
           - audio

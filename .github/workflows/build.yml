@@ -30,6 +30,10 @@ jobs:
           mkdir -p /tmp/idevice-headers
           cp /tmp/idevice-src/ffi/idevice.h /tmp/idevice-headers/
           cp /tmp/idevice-src/swift/include/module.modulemap /tmp/idevice-headers/
+          # MINIMUXER 共存：minimuxer 套件自帶的 IDevice.xcframework 也是 clang module "IDevice"，
+          # 我方模組改名 IDeviceFFI 避免同名模組衝突（僅改 modulemap 名，標頭與行為不動）
+          sed -i '' 's/^module IDevice {/module IDeviceFFI {/' /tmp/idevice-headers/module.modulemap
+          grep "^module" /tmp/idevice-headers/module.modulemap
           mkdir -p "$GITHUB_WORKSPACE/Libraries"
           rm -rf "$GITHUB_WORKSPACE/Libraries/IDeviceFFI.xcframework"
           xcodebuild -create-xcframework \
@@ -43,6 +47,12 @@ jobs:
       
       - name: Generate project
         run: xcodegen generate
+
+      - name: Resolve packages (record pins)
+        run: |
+          xcodebuild -resolvePackageDependencies -project PaxHeartbeatTest.xcodeproj -scheme PaxHeartbeatTest || true
+          echo "=== Package.resolved ==="
+          cat PaxHeartbeatTest.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved 2>/dev/null || find . -name Package.resolved -not -path "./Dependencies/*" | head -3
       
       - name: Build IPA
         run: |

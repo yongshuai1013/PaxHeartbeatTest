@@ -1,5 +1,5 @@
 import Foundation
-import IDevice
+import IDeviceFFI
 
 /// 用 Rust idevice 實現的真正心跳網關（Marco-Polo）
 /// 直接調 FFI，不經過 Swift 的假實現
