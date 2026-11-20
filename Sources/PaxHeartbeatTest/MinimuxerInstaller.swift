@@ -12,6 +12,7 @@ import ZIPFoundation
 /// PublicStaging/<bundleId>/<App>.app、安裝選項 PackageType=Developer——全用套件現成 API，不自創協議。
 /// 日誌 M 前綴（比照按鈕 8）：開頭 M OPEN 標明 minimuxer install，每步 M > ／M < ＋毫秒計時，
 /// 失敗記 M X ＋核心回傳的錯誤原文（MinimuxerError 走 core.describeError）。
+/// 所有 M 行只進詳細頁（full）；主頁只留 ✅/❌ 敘事結論行。
 final class MinimuxerInstaller {
     static let shared = MinimuxerInstaller()
     private init() {}

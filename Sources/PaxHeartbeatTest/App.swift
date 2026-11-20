@@ -19,11 +19,11 @@ final class FxLogRelay {
     func deliver(_ text: String) { handler?(text) }
 }
 
-/// 日誌雙層儲存：full 收全量逐筆（一字不漏，主頁、詳細頁與匯出共用同一份）；
-/// summary 只收摘要行——按鈕操作、進度、✅/❌ 結論、連線 OPEN／X（死亡）／CLOSE、
-/// 探針標題與 OK 結論；逐筆的 >（送出）／<（回覆）明細行只進 full。
-/// 註：主頁自 LOG UI 版一度綁 summary，用戶 2026-11-20 下令改回綁 full 全量
-/// （LOG UI 改版前的樣式：整頁逐筆、整頁滾動）；summary 過濾保留備用，主頁不再使用。
+/// 日誌雙層儲存：full 收全量逐筆（一字不漏，詳細頁與匯出用）；
+/// summary 只收 App 自己的敘事行（主頁用）——按鈕操作、[％] 進度、✅/❌ 結論、
+/// 一句話結果（如「✅ minimuxer 模式 GetValue 成功：UDID …」）。
+/// 所有機器行（C／P／M 開頭的連線紀錄，不分 OPEN／X／>／<）一律只進 full：
+/// idevice 重試永不停，機器行上主頁必淹版（用戶 2026-11-20 最終規格）。
 final class LogStore: ObservableObject {
     @Published private(set) var summary = ""
     @Published private(set) var full = ""
@@ -36,14 +36,21 @@ final class LogStore: ObservableObject {
         }
     }
 
-    /// C 行（鑑識）與 P 行（探針）的逐筆明細不進 summary；其餘皆摘要。
-    /// M 行（minimuxer 模式）比照辦理：M > ／M < 步驟明細只進 full，
-    /// M OPEN／M X 與 ✅/❌ 結論行另進 summary。（主頁現綁 full，此過濾僅備用）
+    /// 機器行一律不上主頁：C<n>（鑑識）／P<n>（探針）／M（minimuxer）的連線紀錄
+    /// 不分 OPEN／X／>／<／OK 全擋；探針的段標題（--- Pn …）與 PROBE MATRIX 起訖行
+    /// 同屬機器輸出塊，一併擋下。其餘敘事行（操作／進度／✅❌／一句話結果）才進 summary。
+    /// 註：minimuxer 的結論是以 ✅ 敘事行形式另發的，不以 M 開頭，照留主頁。
     static func isSummaryLine(_ msg: String) -> Bool {
-        if msg.range(of: "^[CP][0-9]+ [><]", options: .regularExpression) != nil {
+        if msg.range(of: "^[CP][0-9]+ ", options: .regularExpression) != nil {
             return false
         }
-        if msg.range(of: "^M [><]", options: .regularExpression) != nil {
+        if msg.hasPrefix("M ") {
+            return false
+        }
+        if msg.range(of: "^--- P[0-9]+ ", options: .regularExpression) != nil {
+            return false
+        }
+        if msg.hasPrefix("PROBE MATRIX ") {
             return false
         }
         return true
@@ -245,7 +252,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal)
 
-                // 日誌輸出（全量逐筆直接顯示，整頁滾動；詳細頁另有同一份＋下載）
+                // 日誌輸出（主頁只顯示敘事行；機器行全量在詳細頁＋下載）
                 HStack {
                     Text("日誌")
                         .font(.headline)
@@ -255,7 +262,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal)
                 // 日誌全文展開、整頁可滾動（不再用固定高度的框截斷下方日誌）
-                Text(logStore.full)
+                Text(logStore.summary)
                     .font(.system(.caption, design: .monospaced))
                     .frame(maxWidth: .infinity, minHeight: 200, alignment: .topLeading)
                     .padding()
@@ -266,7 +273,7 @@ struct ContentView: View {
                     .frame(height: 1)
                     .id("logBottom")
             }
-            .onChange(of: logStore.full) { _ in
+            .onChange(of: logStore.summary) { _ in
                 if autoScrollLog {
                     proxy.scrollTo("logBottom", anchor: .bottom)
                 }

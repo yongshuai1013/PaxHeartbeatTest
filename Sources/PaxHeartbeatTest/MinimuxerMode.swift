@@ -5,7 +5,7 @@ import Minimuxer
 /// 啟動序列照本體 AppBootManager.startMinimuxer 與 MinimuxerWrapper（讀碼複製，不改參數）：
 ///   bindConnectionConfig（LocalDevVPN 模式）→ core.start(pairingFile:mountPath:) → core.fetchUDID()
 /// LocalDevVPN 模式不開 EMProxy——本體只在 enableEMPforWireguard 時才開，照原樣不開。
-/// 日誌 M 前綴：M > ／M < 是步驟明細（只進詳細頁）；M OPEN／M X 與 ✅/❌ 結論進主頁摘要。
+/// 日誌 M 前綴：所有 M 行只進詳細頁（full）；主頁只留 ✅/❌ 敘事結論行。
 /// minimuxer 內部 log 只去 print()、無 callback 可接，故 M 行由本層在每個步驟邊界發出，
 /// 錯誤一律記核心回傳的原文（MinimuxerError 走 core.describeError）。
 final class MinimuxerModeTester {
