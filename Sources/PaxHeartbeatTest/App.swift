@@ -232,9 +232,9 @@ struct ContentView: View {
                 .padding(.horizontal)
                 .disabled(isTesting)
 
-                // 9. AFC 安裝（minimuxer 連線層；按鈕 5 的 idevice 直連版保留作對照）
+                // 9. AFC 安裝（minimuxer 連線層・IPA 直傳；按鈕 5 的 idevice 直連版保留作對照）
                 Button(action: installViaMinimuxer) {
-                    Text("9. AFC 安裝（minimuxer）")
+                    Text("9. AFC 安裝（minimuxer・IPA 直傳）")
                         .frame(maxWidth: .infinity)
                         .padding()
                         .background(Color.indigo)

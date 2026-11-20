@@ -1,15 +1,14 @@
 import Foundation
 import Minimuxer
-import ZIPFoundation
 
 /// minimuxer 安裝（按鈕 9）：安裝鏈改走 minimuxer 連線層（0.6.4 本體／minimuxer 套件的正規用法）。
 /// 背景：idevice 直連（按鈕 5）的 lockdown 第一筆交換被裝置端 RST（同場實證判負）；
 /// minimuxer 路（按鈕 8）同分鐘回真 UDID 成功，故安裝也改走這層。
-/// 序列照本體：bindConnectionConfig（LocalDevVPN）→ core.start → 解壓 IPA（同按鈕 5 的流程）
-/// → core.sendAppBundleAfc(bundleId:appURL:) → core.installAppBundle(bundleId:appName:)。
-/// 後兩支是套件 MinimuxerAPI 的現成函數：gateway 經自家 usbmuxd proxy 取得服務連線
-/// （afc_client_connect／installation_proxy_connect），staging 路徑
-/// PublicStaging/<bundleId>/<App>.app、安裝選項 PackageType=Developer——全用套件現成 API，不自創協議。
+/// 序列照本體：bindConnectionConfig（LocalDevVPN）→ core.start → IPA 直傳
+/// → core.sendIpaAfc(bundleId:ipaBytes:) → core.installIpa(bundleId:)。
+/// 直傳照 Eili 的 .ipa 模式：整顆 IPA 上傳、裝置端安裝，本機不解壓
+/// （解壓路真機兩度死於 Archive 打不開檔案，整段繞過）。
+/// sendIpaAfc 的 bundleId 在此只作 staging key，用 IPA 檔名去副檔名。
 /// 日誌 M 前綴（比照按鈕 8）：開頭 M OPEN 標明 minimuxer install，每步 M > ／M < ＋毫秒計時，
 /// 失敗記 M X ＋核心回傳的錯誤原文（MinimuxerError 走 core.describeError）。
 /// 所有 M 行只進詳細頁（full）；主頁只留 ✅/❌ 敘事結論行。
@@ -84,78 +83,44 @@ final class MinimuxerInstaller {
         }
         log("M < start OK @\(ms())ms")
 
-        // 解壓 IPA（同按鈕 5／AppInstaller 的流程：ZIPFoundation 逐 entry 展開，取 Payload/*.app）
-        // 自檢：extract 前先記存在與大小，Archive 打不開時錯誤要帶路徑與這兩個值，不要再只有「無法打開 IPA」
-        let ipaExists = FileManager.default.fileExists(atPath: ipaURL.path)
-        let ipaSize = (try? FileManager.default.attributesOfItem(atPath: ipaURL.path))?[.size] as? NSNumber
-        log("M > extract ipa size=\(ipaSize?.int64Value ?? -1) exists=\(ipaExists) path=\(ipaURL.path)")
-        log("M > extract ipa")
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let appLocalURL: URL
-        let appName: String
-        let bundleId: String
+        // IPA 直傳（照 Eili 的 .ipa 模式）：整顆 IPA 讀成 Data，經套件 sendIpaAfc 上傳、
+        // installIpa 交裝置端安裝——本機不解壓（解壓路真機兩度死於 Archive 打不開檔案，整段繞過）。
+        // sendIpaAfc 的 bundleId 參數在此只作 staging key：用 IPA 檔名去掉副檔名（如 LocalDevVPN-fakesigned）。
+        let ipaData: Data
         do {
-            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-            guard let archive = Archive(url: ipaURL, accessMode: .read) else {
-                throw InstallerError.afcFailed("無法打開 IPA path=\(ipaURL.path) exists=\(ipaExists) size=\(ipaSize?.int64Value ?? -1)")
-            }
-            for entry in archive {
-                let dest = tempDir.appendingPathComponent(entry.path)
-                if entry.type == .directory {
-                    try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
-                } else {
-                    try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    _ = try archive.extract(entry, to: dest)
-                }
-            }
-            let payloadDir = tempDir.appendingPathComponent("Payload")
-            let contents = try FileManager.default.contentsOfDirectory(atPath: payloadDir.path)
-            guard let found = contents.first(where: { $0.hasSuffix(".app") }) else {
-                throw InstallerError.afcFailed("找不到 .app")
-            }
-            appName = found
-            appLocalURL = payloadDir.appendingPathComponent(found)
-            // bundleId 以 .app 的 Info.plist CFBundleIdentifier 為準（本體 staging 資料夾名用的就是它）
-            let info = NSDictionary(contentsOf: appLocalURL.appendingPathComponent("Info.plist"))
-            guard let bid = info?["CFBundleIdentifier"] as? String, !bid.isEmpty else {
-                throw InstallerError.afcFailed("讀不到 CFBundleIdentifier")
-            }
-            bundleId = bid
+            ipaData = try Data(contentsOf: ipaURL)
         } catch {
-            try? FileManager.default.removeItem(at: tempDir)
-            let what = error.localizedDescription
-            log("M X extract err=\(what) life=\(ms())ms")
-            log("❌ minimuxer 安裝：解壓失敗（\(what)）")
+            log("M X ipabytes err=\(error.localizedDescription) path=\(ipaURL.path) life=\(ms())ms")
+            log("❌ minimuxer 安裝：讀不到 IPA（\(error.localizedDescription)）")
             return
         }
-        defer { try? FileManager.default.removeItem(at: tempDir) }
-        log("M < extract OK app=\(appName) bundleId=\(bundleId) @\(ms())ms")
+        log("M > ipabytes size=\(ipaData.count) path=\(ipaURL.path)")
+        let stagingKey = ipaURL.deletingPathExtension().lastPathComponent
 
-        // AFC 上傳 .app（套件現成 API：gateway 經 usbmuxd proxy 連 AFC，
-        // 上傳到 PublicStaging/<bundleId>/<App>.app）
-        log("M > sendAppBundleAfc bundleId=\(bundleId) app=\(appName)")
+        // AFC 上傳整顆 IPA（套件現成 API：gateway 經 usbmuxd proxy 連 AFC）
+        log("M > sendIpaAfc key=\(stagingKey) size=\(ipaData.count)")
         do {
-            try await mm.core.sendAppBundleAfc(bundleId: bundleId, appURL: appLocalURL)
+            try await mm.core.sendIpaAfc(bundleId: stagingKey, ipaBytes: ipaData)
         } catch {
             let what = describe(error, core: mm.core)
-            log("M X sendAppBundleAfc err=\(what) life=\(ms())ms")
-            log("❌ minimuxer 安裝：AFC 上傳失敗（\(what)）")
+            log("M X sendIpaAfc err=\(what) life=\(ms())ms")
+            log("❌ minimuxer 安裝：AFC 上傳 IPA 失敗（\(what)）")
             return
         }
-        log("M < sendAppBundleAfc OK @\(ms())ms")
+        log("M < sendIpaAfc OK @\(ms())ms")
 
-        // installation_proxy 安裝（套件現成 API：PackageType=Developer）
-        log("M > installAppBundle bundleId=\(bundleId) app=\(appName)")
+        // installation_proxy 安裝 IPA（套件現成 API：裝置端自己解 IPA 安裝）
+        log("M > installIpa key=\(stagingKey)")
         do {
-            try await mm.core.installAppBundle(bundleId: bundleId, appName: appName)
+            try await mm.core.installIpa(bundleId: stagingKey)
         } catch {
             let what = describe(error, core: mm.core)
-            log("M X installAppBundle err=\(what) life=\(ms())ms")
-            log("❌ minimuxer 安裝：installation_proxy 安裝失敗（\(what)）")
+            log("M X installIpa err=\(what) life=\(ms())ms")
+            log("❌ minimuxer 安裝：installIpa 失敗（\(what)）")
             return
         }
-        log("M < installAppBundle OK @\(ms())ms")
-        log("✅ minimuxer 安裝完成：\(appName)（\(bundleId)）")
+        log("M < installIpa OK @\(ms())ms")
+        log("✅ minimuxer 安裝完成（IPA 直傳）：\(ipaURL.lastPathComponent)")
     }
 
     /// 錯誤原文：MinimuxerError 用核心自己的 describeError，其餘用 localizedDescription
