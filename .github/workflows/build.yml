@@ -11,22 +11,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Download IDevice xcframework (SideStore prebuilt)
+      - name: Build patched IDevice xcframework (SINGLE-WRITE)
         run: |
-          # 直接用 SideStore/idevice 的預編包（跟 minimuxer 同源）
-          # https://github.com/SideStore/idevice/releases/download/v0.1.68-ss-3e55c84/idevice-xcframework-v0.1.68-ss-3e55c84.zip
-          mkdir -p /tmp/idevice_dl
-          curl -L -o /tmp/idevice_dl/idevice.zip "https://github.com/SideStore/idevice/releases/download/v0.1.68-ss-3e55c84/idevice-xcframework-v0.1.68-ss-3e55c84.zip"
-          mkdir -p Libraries
-          unzip -q -o /tmp/idevice_dl/idevice.zip -d /tmp/idevice_dl/
-          echo "=== Zip contents ==="
-          ls -R /tmp/idevice_dl/ | head -30
-          # 找到 xcframework（名字可能不同）
-          XCFRAMEWORK=$(find /tmp/idevice_dl -name "*.xcframework" -type d | head -1)
-          echo "Found: $XCFRAMEWORK"
-          rm -rf Libraries/IDeviceFFI.xcframework
-          cp -R "$XCFRAMEWORK" Libraries/IDeviceFFI.xcframework
-          ls -lh Libraries/IDeviceFFI.xcframework/
+          # 判別槍專用：從源碼構建打了攢寫補丁的 idevice（取代官方預編包）
+          # 補丁：明文 lockdown 交換的長度頭＋body 併成單次 write（TLS 後原樣）
+          git clone --depth 1 --branch v0.1.68-ss-3e55c84 https://github.com/SideStore/idevice.git /tmp/idevice-src
+          git -C /tmp/idevice-src apply "$GITHUB_WORKSPACE/patches/idevice-single-write.patch"
+          echo "SINGLE-WRITE markers in patched lib.rs:"
+          grep -c "SINGLE-WRITE" /tmp/idevice-src/idevice/src/lib.rs
+          rustup target add aarch64-apple-ios
+          cd /tmp/idevice-src/ffi
+          BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$(xcrun --sdk iphoneos --show-sdk-path)" \
+            IPHONEOS_DEPLOYMENT_TARGET=17.0 \
+            cargo build --release --target aarch64-apple-ios --features obfuscate
+          ls -lh /tmp/idevice-src/target/aarch64-apple-ios/release/libidevice_ffi.a
+          mkdir -p /tmp/idevice-headers
+          cp /tmp/idevice-src/ffi/idevice.h /tmp/idevice-headers/
+          cp /tmp/idevice-src/swift/include/module.modulemap /tmp/idevice-headers/
+          mkdir -p "$GITHUB_WORKSPACE/Libraries"
+          rm -rf "$GITHUB_WORKSPACE/Libraries/IDeviceFFI.xcframework"
+          xcodebuild -create-xcframework \
+            -library /tmp/idevice-src/target/aarch64-apple-ios/release/libidevice_ffi.a \
+            -headers /tmp/idevice-headers \
+            -output "$GITHUB_WORKSPACE/Libraries/IDeviceFFI.xcframework"
+          ls -R "$GITHUB_WORKSPACE/Libraries/IDeviceFFI.xcframework"
       
       - name: Install XcodeGen
         run: brew install xcodegen

@@ -22,10 +22,16 @@ struct ContentView: View {
     
     var body: some View {
         NavigationView {
+            ScrollViewReader { proxy in
+            ScrollView {
             VStack(spacing: 12) {
                 Text("PaxHeartbeatTest")
                     .font(.title)
                     .padding(.top)
+                Text("SINGLE-WRITE ON")
+                    .font(.caption)
+                    .bold()
+                    .foregroundColor(.red)
                 
                 // 設備 IP 輸入
                 HStack {
@@ -152,32 +158,29 @@ struct ContentView: View {
                         .font(.caption)
                 }
                 .padding(.horizontal)
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        Text(log)
-                            .font(.system(.caption, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding()
-                        Color.clear
-                            .frame(height: 1)
-                            .id("logBottom")
-                    }
-                    .frame(minHeight: 200)
+                // 日誌全文展開、整頁可滾動（不再用固定高度的框截斷下方日誌）
+                Text(log)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(maxWidth: .infinity, minHeight: 200, alignment: .topLeading)
+                    .padding()
                     .background(Color.black.opacity(0.05))
                     .cornerRadius(8)
                     .padding(.horizontal)
-                    .onChange(of: log) { _ in
-                        if autoScrollLog {
-                            proxy.scrollTo("logBottom", anchor: .bottom)
-                        }
-                    }
+                Color.clear
+                    .frame(height: 1)
+                    .id("logBottom")
+            }
+            .onChange(of: log) { _ in
+                if autoScrollLog {
+                    proxy.scrollTo("logBottom", anchor: .bottom)
                 }
-                
-                Spacer()
+            }
+            }
             }
             .navigationTitle("AFC 測試")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
+                appendLog("=== SINGLE-WRITE ON（攢寫判別版）===")
                 // App 打開時，如果已有配對檔，自動啟動常駐心跳
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                 let pairingURL = docs.appendingPathComponent("PairingFiles/PairingFile_Lockdown.plist")
