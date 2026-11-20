@@ -1,0 +1,563 @@
+diff --git a/ffi/src/forensics.rs b/ffi/src/forensics.rs
+new file mode 100644
+index 0000000..e0a2c55
+--- /dev/null
++++ b/ffi/src/forensics.rs
+@@ -0,0 +1,21 @@
++// FORENSICS (diagnostic build): host-app sink for the core crate's
++// per-connection exchange recorder (see `idevice::forensics`).
++
++use std::os::raw::c_char;
++
++/// Receives one forensics line (NUL-terminated, no trailing newline).
++/// The string is only valid for the duration of the call; copy it.
++/// Nullable: NULL clears the registration.
++pub type IdeviceForensicsCallback = Option<extern "C" fn(*const c_char)>;
++
++/// Registers the callback that receives forensics lines from every
++/// instrumented device connection. Pass NULL to disable.
++///
++/// # Safety
++/// `callback` must remain callable for as long as it is registered.
++#[unsafe(no_mangle)]
++pub extern "C" fn idevice_forensics_set_callback(
++    callback: IdeviceForensicsCallback,
++) {
++    idevice::forensics::set_callback(callback);
++}
+diff --git a/ffi/src/lib.rs b/ffi/src/lib.rs
+index 1837e76..5444bfe 100644
+--- a/ffi/src/lib.rs
++++ b/ffi/src/lib.rs
+@@ -37,6 +37,7 @@ pub mod installcoordination_proxy;
+ pub mod location_simulation;
+ pub mod lockdown;
+ pub mod logging;
++pub mod forensics;
+ #[cfg(feature = "misagent")]
+ pub mod misagent;
+ #[cfg(feature = "mobile_image_mounter")]
+diff --git a/idevice/src/forensics.rs b/idevice/src/forensics.rs
+new file mode 100644
+index 0000000..d84da20
+--- /dev/null
++++ b/idevice/src/forensics.rs
+@@ -0,0 +1,67 @@
++//! FORENSICS: per-connection exchange recorder (diagnostic build only).
++//!
++//! Every instrumented `Idevice` connection emits short, one-line records to a
++//! callback registered by the host app (see `ffi::forensics`). Lines look like:
++//!
++//! ```text
++//! C2 OPEN 10.7.0.1:62078
++//! C2 > QueryType 182B @3ms
++//! C2 < 96B @31ms
++//! C2 > StartService/afc 214B @40ms
++//! C2 < 128B @88ms
++//! C3 OPEN PaxHeartbeatTest-AFC
++//! C3 > AFCop7 56B @2ms
++//! C3 X >AFCop7 err=Socket BrokenPipe os32 sent=56 recv=0 life=4ms
++//! ```
++//!
++//! No callback registered = no output, near-zero cost.
++
++use std::ffi::CString;
++use std::os::raw::c_char;
++use std::sync::Mutex;
++use std::sync::atomic::{AtomicU64, Ordering};
++
++/// Line sink registered by the host app through the FFI layer.
++pub type FxCallback = extern "C" fn(*const c_char);
++
++static FX_CALLBACK: Mutex<Option<FxCallback>> = Mutex::new(None);
++static FX_NEXT_ID: AtomicU64 = AtomicU64::new(1);
++
++/// Registers (or clears, with `None`) the host app's line sink.
++pub fn set_callback(cb: Option<FxCallback>) {
++    if let Ok(mut guard) = FX_CALLBACK.lock() {
++        *guard = cb;
++    }
++}
++
++/// True once a sink is registered; lets callers skip formatting work.
++pub fn enabled() -> bool {
++    FX_CALLBACK.lock().map(|g| g.is_some()).unwrap_or(false)
++}
++
++/// Hands out the next connection number (1-based, monotonic per process).
++pub fn next_conn_id() -> u64 {
++    FX_NEXT_ID.fetch_add(1, Ordering::SeqCst)
++}
++
++/// Emits one already-formatted line to the sink, if any.
++pub fn emit(line: &str) {
++    let cb = FX_CALLBACK.lock().ok().and_then(|g| *g);
++    if let Some(cb) = cb {
++        if let Ok(cstr) = CString::new(line) {
++            cb(cstr.as_ptr());
++        }
++    }
++}
++
++/// Truncates an error string for the one-line death record.
++pub fn trunc_err(s: &str) -> String {
++    const MAX: usize = 72;
++    if s.chars().count() <= MAX {
++        s.to_string()
++    } else {
++        let mut out: String = s.chars().take(MAX).collect();
++        out.push('~');
++        out
++    }
++}
+diff --git a/idevice/src/lib.rs b/idevice/src/lib.rs
+index 5613853..4b87bc7 100644
+--- a/idevice/src/lib.rs
++++ b/idevice/src/lib.rs
+@@ -7,6 +7,7 @@
+ mod ca;
+ pub mod cursor;
+ pub mod darwin_errno;
++pub mod forensics;
+ #[cfg(feature = "_http")]
+ pub mod http;
+ #[cfg(feature = "mdns")]
+@@ -227,6 +228,18 @@ pub struct Idevice {
+     label: String,
+     /// Cached device UDID for convenience in higher-level protocols
+     udid: Option<String>,
++    /// FORENSICS: connection number handed out by `forensics::next_conn_id`
++    fx_id: u64,
++    /// FORENSICS: when this connection began (OPEN line)
++    fx_t0: time::Instant,
++    /// FORENSICS: total bytes sent on this connection
++    fx_sent: u64,
++    /// FORENSICS: total bytes received on this connection
++    fx_recv: u64,
++    /// FORENSICS: whether the OPEN line was emitted
++    fx_open: bool,
++    /// FORENSICS: whether the death (X) line was emitted
++    fx_dead: bool,
+ }
+ 
+ impl Idevice {
+@@ -240,11 +253,88 @@ impl Idevice {
+             socket: Some(socket),
+             label: label.into(),
+             udid: None,
++            fx_id: 0,
++            fx_t0: time::Instant::now(),
++            fx_sent: 0,
++            fx_recv: 0,
++            fx_open: false,
++            fx_dead: false,
+         }
+     }
+ 
+-    pub fn get_socket(self) -> Option<Box<dyn ReadWrite>> {
+-        self.socket
++    // ---- FORENSICS (diagnostic build): per-connection exchange recorder ----
++
++    /// Begins the forensics record for this connection, emitting its OPEN
++    /// line exactly once. Providers that know the target (e.g. TCP address)
++    /// call this right after construction; any other path is begun lazily by
++    /// the first instrumented send/recv with the connection label.
++    pub fn fx_begin(&mut self, target: &str) {
++        if self.fx_open {
++            return;
++        }
++        self.fx_open = true;
++        self.fx_id = crate::forensics::next_conn_id();
++        self.fx_t0 = time::Instant::now();
++        if crate::forensics::enabled() {
++            crate::forensics::emit(&format!("C{} OPEN {}", self.fx_id, target));
++        }
++    }
++
++    fn fx_ensure(&mut self) {
++        if !self.fx_open {
++            let label = self.label.clone();
++            self.fx_begin(&label);
++        }
++    }
++
++    fn fx_ms(&self) -> u64 {
++        self.fx_t0.elapsed().as_millis() as u64
++    }
++
++    fn fx_sent_line(&mut self, step: &str, bytes: usize) {
++        self.fx_sent += bytes as u64;
++        if crate::forensics::enabled() {
++            crate::forensics::emit(&format!(
++                "C{} > {} {}B @{}ms",
++                self.fx_id,
++                step,
++                bytes,
++                self.fx_ms()
++            ));
++        }
++    }
++
++    fn fx_recv_line(&mut self, bytes: usize) {
++        self.fx_recv += bytes as u64;
++        if crate::forensics::enabled() {
++            crate::forensics::emit(&format!(
++                "C{} < {}B @{}ms",
++                self.fx_id,
++                bytes,
++                self.fx_ms()
++            ));
++        }
++    }
++
++    fn fx_fail(&mut self, dir_step: &str, err: &IdeviceError) {
++        self.fx_dead = true;
++        if crate::forensics::enabled() {
++            crate::forensics::emit(&format!(
++                "C{} X {} err={} sent={} recv={} life={}ms",
++                self.fx_id,
++                dir_step,
++                crate::forensics::trunc_err(&fx_err_string(err)),
++                self.fx_sent,
++                self.fx_recv,
++                self.fx_ms()
++            ));
++        }
++    }
++
++    pub fn get_socket(mut self) -> Option<Box<dyn ReadWrite>> {
++        // `take()` instead of a move: `Idevice` implements `Drop` (FORENSICS
++        // close-out record), so fields cannot be moved out of it.
++        self.socket.take()
+     }
+ 
+     /// Sets cached UDID
+@@ -339,6 +429,28 @@ impl Idevice {
+     /// # Errors
+     /// Returns `IdeviceError` if serialization or transmission fails
+     async fn send_plist(&mut self, message: plist::Value) -> Result<(), IdeviceError> {
++        // FORENSICS wrapper: record the exchange, then run the original body.
++        self.fx_ensure();
++        let step = fx_plist_step(&message);
++        match self.send_plist_inner(message).await {
++            Ok(bytes) => {
++                self.fx_sent_line(&step, bytes);
++                Ok(())
++            }
++            Err(e) => {
++                let step = format!(">{step}");
++                self.fx_fail(&step, &e);
++                Err(e)
++            }
++        }
++    }
++
++    /// Original `send_plist` body; returns the frame size (4-byte header +
++    /// body) so the FORENSICS wrapper can log it.
++    async fn send_plist_inner(
++        &mut self,
++        message: plist::Value,
++    ) -> Result<usize, IdeviceError> {
+         if let Some(socket) = &mut self.socket {
+             debug!("Sending plist: {}", pretty_print_plist(&message));
+ 
+@@ -351,7 +463,7 @@ impl Idevice {
+             socket.write_all(&len.to_be_bytes()).await?;
+             socket.write_all(message.as_bytes()).await?;
+             socket.flush().await?;
+-            Ok(())
++            Ok(4 + message.len())
+         } else {
+             Err(IdeviceError::NoEstablishedConnection)
+         }
+@@ -366,6 +478,28 @@ impl Idevice {
+     /// Returns `IdeviceError` if serialization or transmission fails
+     #[allow(dead_code)]
+     async fn send_bplist(&mut self, message: plist::Value) -> Result<(), IdeviceError> {
++        // FORENSICS wrapper: record the exchange, then run the original body.
++        self.fx_ensure();
++        let step = fx_plist_step(&message);
++        match self.send_bplist_inner(message).await {
++            Ok(bytes) => {
++                self.fx_sent_line(&step, bytes);
++                Ok(())
++            }
++            Err(e) => {
++                let step = format!(">{step}");
++                self.fx_fail(&step, &e);
++                Err(e)
++            }
++        }
++    }
++
++    /// Original `send_bplist` body; returns the frame size (4-byte header +
++    /// body) so the FORENSICS wrapper can log it.
++    async fn send_bplist_inner(
++        &mut self,
++        message: plist::Value,
++    ) -> Result<usize, IdeviceError> {
+         if let Some(socket) = &mut self.socket {
+             debug!("Sending plist: {}", pretty_print_plist(&message));
+ 
+@@ -377,7 +511,7 @@ impl Idevice {
+             socket.write_all(&len.to_be_bytes()).await?;
+             socket.write_all(&message).await?;
+             socket.flush().await?;
+-            Ok(())
++            Ok(4 + message.len())
+         } else {
+             Err(IdeviceError::NoEstablishedConnection)
+         }
+@@ -404,6 +538,31 @@ impl Idevice {
+     pub async fn send_raw_vectored(
+         &mut self,
+         bufs: &[std::io::IoSlice<'_>],
++    ) -> Result<(), IdeviceError> {
++        // FORENSICS wrapper: record the send, then run the original body.
++        self.fx_ensure();
++        let step = bufs
++            .first()
++            .map(|b| fx_raw_step(b))
++            .unwrap_or_else(|| "RAW".to_string());
++        let bytes: usize = bufs.iter().map(|b| b.len()).sum();
++        match self.send_raw_vectored_inner(bufs).await {
++            Ok(()) => {
++                self.fx_sent_line(&step, bytes);
++                Ok(())
++            }
++            Err(e) => {
++                let step = format!(">{step}");
++                self.fx_fail(&step, &e);
++                Err(e)
++            }
++        }
++    }
++
++    /// Original `send_raw_vectored` body.
++    async fn send_raw_vectored_inner(
++        &mut self,
++        bufs: &[std::io::IoSlice<'_>],
+     ) -> Result<(), IdeviceError> {
+         if let Some(socket) = &mut self.socket {
+             let mut curr_idx = 0;
+@@ -482,6 +641,37 @@ impl Idevice {
+         callback: impl Fn(((usize, usize), S)) -> Fut,
+         state: S,
+     ) -> Result<(), IdeviceError>
++    where
++        Fut: std::future::Future<Output = ()>,
++        S: Clone,
++    {
++        // FORENSICS wrapper: record the send, then run the original body.
++        self.fx_ensure();
++        let step = fx_raw_step(message);
++        let bytes = message.len();
++        match self
++            .send_raw_with_progress_inner(message, callback, state)
++            .await
++        {
++            Ok(()) => {
++                self.fx_sent_line(&step, bytes);
++                Ok(())
++            }
++            Err(e) => {
++                let step = format!(">{step}");
++                self.fx_fail(&step, &e);
++                Err(e)
++            }
++        }
++    }
++
++    /// Original `send_raw_with_progress` body.
++    async fn send_raw_with_progress_inner<Fut, S>(
++        &mut self,
++        message: &[u8],
++        callback: impl Fn(((usize, usize), S)) -> Fut,
++        state: S,
++    ) -> Result<(), IdeviceError>
+     where
+         Fut: std::future::Future<Output = ()>,
+         S: Clone,
+@@ -513,6 +703,23 @@ impl Idevice {
+     /// # Errors
+     /// Returns `IdeviceError` if reading fails or connection is closed prematurely
+     pub async fn read_raw(&mut self, len: usize) -> Result<Vec<u8>, IdeviceError> {
++        // FORENSICS wrapper: record the read, then run the original body.
++        self.fx_ensure();
++        match self.read_raw_inner(len).await {
++            Ok(buf) => {
++                let n = buf.len();
++                self.fx_recv_line(n);
++                Ok(buf)
++            }
++            Err(e) => {
++                self.fx_fail("<RAW", &e);
++                Err(e)
++            }
++        }
++    }
++
++    /// Original `read_raw` body.
++    async fn read_raw_inner(&mut self, len: usize) -> Result<Vec<u8>, IdeviceError> {
+         if let Some(socket) = &mut self.socket {
+             let mut buf = vec![0; len];
+             socket.read_exact(&mut buf).await?;
+@@ -533,6 +740,23 @@ impl Idevice {
+     /// # Errors
+     /// Returns `IdeviceError` if reading fails
+     pub async fn read_any(&mut self, max_size: u32) -> Result<Vec<u8>, IdeviceError> {
++        // FORENSICS wrapper: record the read, then run the original body.
++        self.fx_ensure();
++        match self.read_any_inner(max_size).await {
++            Ok(buf) => {
++                let n = buf.len();
++                self.fx_recv_line(n);
++                Ok(buf)
++            }
++            Err(e) => {
++                self.fx_fail("<ANY", &e);
++                Err(e)
++            }
++        }
++    }
++
++    /// Original `read_any` body.
++    async fn read_any_inner(&mut self, max_size: u32) -> Result<Vec<u8>, IdeviceError> {
+         if let Some(socket) = &mut self.socket {
+             let mut buf = vec![0; max_size as usize];
+             let len = socket.read(&mut buf).await?;
+@@ -587,6 +811,25 @@ impl Idevice {
+     }
+ 
+     async fn read_plist_value(&mut self) -> Result<plist::Value, IdeviceError> {
++        // FORENSICS wrapper: record the read, then run the original body.
++        self.fx_ensure();
++        match self.read_plist_value_inner().await {
++            Ok((res, bytes)) => {
++                self.fx_recv_line(bytes);
++                Ok(res)
++            }
++            Err(e) => {
++                self.fx_fail("<PLIST", &e);
++                Err(e)
++            }
++        }
++    }
++
++    /// Original `read_plist_value` body; also returns the frame size
++    /// (4-byte header + body) so the FORENSICS wrapper can log it.
++    async fn read_plist_value_inner(
++        &mut self,
++    ) -> Result<(plist::Value, usize), IdeviceError> {
+         if let Some(socket) = &mut self.socket {
+             debug!("Reading response size");
+             let mut buf = [0u8; 4];
+@@ -594,8 +837,9 @@ impl Idevice {
+             let len = u32::from_be_bytes(buf);
+             let mut buf = vec![0; len as usize];
+             socket.read_exact(&mut buf).await?;
++            let bytes = 4 + buf.len();
+             let res: plist::Value = plist::from_bytes(&buf)?;
+-            Ok(res)
++            Ok((res, bytes))
+         } else {
+             Err(IdeviceError::NoEstablishedConnection)
+         }
+@@ -700,6 +944,81 @@ impl Idevice {
+     }
+ }
+ 
++/// FORENSICS: short step name for an outgoing plist (its `Request` field,
++/// plus the service for StartService / the key for GetValue).
++fn fx_plist_step(message: &plist::Value) -> String {
++    let dict = message.as_dictionary();
++    let req = dict
++        .and_then(|d| d.get("Request"))
++        .and_then(|v| v.as_string())
++        .unwrap_or("PLIST");
++    let mut step = req.to_string();
++    if req == "StartService" {
++        if let Some(svc) = dict
++            .and_then(|d| d.get("Service"))
++            .and_then(|v| v.as_string())
++        {
++            step.push('/');
++            step.push_str(svc.strip_prefix("com.apple.").unwrap_or(svc));
++        }
++    } else if req == "GetValue" {
++        if let Some(key) = dict
++            .and_then(|d| d.get("Key"))
++            .and_then(|v| v.as_string())
++        {
++            step.push(':');
++            step.push_str(key);
++        }
++    }
++    if step.len() > 30 {
++        step.truncate(30);
++    }
++    step
++}
++
++/// FORENSICS: step name for a raw send; AFC packets are recognized by their
++/// `CFA6LPAA` magic and labeled with the operation number (u64 LE @ 32).
++fn fx_raw_step(bytes: &[u8]) -> String {
++    if bytes.len() >= 40 && &bytes[..8] == b"CFA6LPAA" {
++        let op = u64::from_le_bytes(bytes[32..40].try_into().unwrap());
++        format!("AFCop{op}")
++    } else {
++        "RAW".to_string()
++    }
++}
++
++/// FORENSICS: error string for the death line; socket errors keep their
++/// io kind + OS code (the plain Display would just say "device socket io
++/// failed" and hide the BrokenPipe/32 the diagnosis needs).
++fn fx_err_string(err: &IdeviceError) -> String {
++    match err {
++        IdeviceError::Socket(io) => {
++            let code = io
++                .raw_os_error()
++                .map(|c| c.to_string())
++                .unwrap_or_else(|| "?".to_string());
++            format!("Socket {:?} os{}", io.kind(), code)
++        }
++        other => other.to_string(),
++    }
++}
++
++/// FORENSICS: a connection that ends without a death line reports its
++/// totals on drop, so every begun connection leaves a complete record.
++impl Drop for Idevice {
++    fn drop(&mut self) {
++        if self.fx_open && !self.fx_dead && crate::forensics::enabled() {
++            crate::forensics::emit(&format!(
++                "C{} CLOSE sent={} recv={} life={}ms",
++                self.fx_id,
++                self.fx_sent,
++                self.fx_recv,
++                self.fx_ms()
++            ));
++        }
++    }
++}
++
+ /// Errors specific to the CDTunnel protocol
+ #[derive(Error, Debug)]
+ #[non_exhaustive]
+diff --git a/idevice/src/provider.rs b/idevice/src/provider.rs
+index c2a6241..20afb08 100644
+--- a/idevice/src/provider.rs
++++ b/idevice/src/provider.rs
+@@ -90,7 +90,10 @@ impl IdeviceProvider for TcpProvider {
+                 IpAddr::V6(ipv6) => SocketAddr::V6(SocketAddrV6::new(ipv6, port, 0, scope_id)),
+             };
+             let stream = TcpStream::connect(socket_addr).await?;
+-            Ok(Idevice::new(Box::new(stream), label))
++            let mut device = Idevice::new(Box::new(stream), label);
++            // FORENSICS: begin this connection's record with its target.
++            device.fx_begin(&socket_addr.to_string());
++            Ok(device)
+         })
+     }
+ 

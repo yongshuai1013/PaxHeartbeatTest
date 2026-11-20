@@ -11,14 +11,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Build patched IDevice xcframework (SINGLE-WRITE)
+      - name: Build patched IDevice xcframework (FORENSICS)
         run: |
-          # 判別槍專用：從源碼構建打了攢寫補丁的 idevice（取代官方預編包）
-          # 補丁：明文 lockdown 交換的長度頭＋body 併成單次 write（TLS 後原樣）
+          # 死點鑑識版專用：從源碼構建打了鑑識補丁的 idevice（取代官方預編包）
+          # 補丁：不改任何收發行為，只逐連線記錄每筆 lockdown/AFC 交換
+          # （步驟／字節／毫秒／死點），經 FFI callback 送進 App 日誌畫面
           git clone --depth 1 --branch v0.1.68-ss-3e55c84 https://github.com/SideStore/idevice.git /tmp/idevice-src
-          git -C /tmp/idevice-src apply "$GITHUB_WORKSPACE/patches/idevice-single-write.patch"
-          echo "SINGLE-WRITE markers in patched lib.rs:"
-          grep -c "SINGLE-WRITE" /tmp/idevice-src/idevice/src/lib.rs
+          git -C /tmp/idevice-src apply "$GITHUB_WORKSPACE/patches/idevice-forensics.patch"
+          echo "FORENSICS markers in patched lib.rs:"
+          grep -c "FORENSICS" /tmp/idevice-src/idevice/src/lib.rs
+          ls /tmp/idevice-src/idevice/src/forensics.rs /tmp/idevice-src/ffi/src/forensics.rs
           rustup target add aarch64-apple-ios
           cd /tmp/idevice-src/ffi
           BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$(xcrun --sdk iphoneos --show-sdk-path)" \

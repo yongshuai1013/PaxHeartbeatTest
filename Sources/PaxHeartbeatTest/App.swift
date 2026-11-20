@@ -1,5 +1,23 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import IDevice
+
+/// FORENSICS 橋接：idevice 核心的每筆交換紀錄經 FFI callback 進到這裡，
+/// 再轉交 FxLogRelay 送進 App 的日誌畫面（appendLog）。
+private func ideviceForensicsLine(_ line: UnsafePointer<CChar>?) {
+    guard let line else { return }
+    let text = String(cString: line)
+    DispatchQueue.main.async {
+        FxLogRelay.shared.deliver(text)
+    }
+}
+
+/// FORENSICS 橋接中繼：ContentView 在 onAppear 把 handler 接上 appendLog。
+final class FxLogRelay {
+    static let shared = FxLogRelay()
+    var handler: ((String) -> Void)?
+    func deliver(_ text: String) { handler?(text) }
+}
 
 @main
 struct PaxHeartbeatTestApp: App {
@@ -28,7 +46,7 @@ struct ContentView: View {
                 Text("PaxHeartbeatTest")
                     .font(.title)
                     .padding(.top)
-                Text("SINGLE-WRITE ON")
+                Text("FORENSICS ON")
                     .font(.caption)
                     .bold()
                     .foregroundColor(.red)
@@ -180,7 +198,10 @@ struct ContentView: View {
             .navigationTitle("AFC 測試")
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
-                appendLog("=== SINGLE-WRITE ON（攢寫判別版）===")
+                // FORENSICS：註冊 idevice 鑑識紀錄橋（每筆交換即時進日誌畫面）
+                FxLogRelay.shared.handler = { msg in appendLog(msg) }
+                idevice_forensics_set_callback(ideviceForensicsLine)
+                appendLog("=== FORENSICS ON（死點鑑識版）===")
                 // App 打開時，如果已有配對檔，自動啟動常駐心跳
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                 let pairingURL = docs.appendingPathComponent("PairingFiles/PairingFile_Lockdown.plist")
