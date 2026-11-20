@@ -19,6 +19,30 @@ final class FxLogRelay {
     func deliver(_ text: String) { handler?(text) }
 }
 
+/// 日誌雙層儲存：full 收全量逐筆（一字不漏，詳細頁與匯出用）；
+/// summary 只收摘要行（主頁用）——按鈕操作、進度、✅/❌ 結論、連線 OPEN／X（死亡）／CLOSE、
+/// 探針標題與 OK 結論；逐筆的 >（送出）／<（回覆）明細行只進 full。
+final class LogStore: ObservableObject {
+    @Published private(set) var summary = ""
+    @Published private(set) var full = ""
+
+    func append(_ msg: String) {
+        let line = "[\(Date().formatted(date: .omitted, time: .standard))] \(msg)\n"
+        full += line
+        if Self.isSummaryLine(msg) {
+            summary += line
+        }
+    }
+
+    /// C 行（鑑識）與 P 行（探針）的逐筆明細不上主頁；其餘皆摘要。
+    static func isSummaryLine(_ msg: String) -> Bool {
+        if msg.range(of: "^[CP][0-9]+ [><]", options: .regularExpression) != nil {
+            return false
+        }
+        return true
+    }
+}
+
 @main
 struct PaxHeartbeatTestApp: App {
     var body: some Scene {
@@ -30,7 +54,7 @@ struct PaxHeartbeatTestApp: App {
 
 struct ContentView: View {
     @State private var deviceIP = "10.7.0.1"
-    @State private var log = ""
+    @StateObject private var logStore = LogStore()
     @State private var autoScrollLog = true
     @State private var isTesting = false
     @State private var showIPAPicker = false
@@ -46,7 +70,7 @@ struct ContentView: View {
                 Text("PaxHeartbeatTest")
                     .font(.title)
                     .padding(.top)
-                Text("PROBE MATRIX")
+                Text("PROBE MATRIX + LOG UI")
                     .font(.caption)
                     .bold()
                     .foregroundColor(.red)
@@ -179,9 +203,20 @@ struct ContentView: View {
                 .padding(.horizontal)
                 .disabled(isTesting)
 
-                // 日誌輸出
+                // 詳細日誌入口（完整逐筆）
+                NavigationLink(destination: LogDetailView(store: logStore)) {
+                    Text("詳細日誌（完整逐筆）")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.gray)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+                .padding(.horizontal)
+
+                // 日誌輸出（摘要：逐筆 > < 明細只在詳細頁）
                 HStack {
-                    Text("日誌")
+                    Text("日誌（摘要）")
                         .font(.headline)
                     Spacer()
                     Toggle("自動滾動", isOn: $autoScrollLog)
@@ -189,7 +224,7 @@ struct ContentView: View {
                 }
                 .padding(.horizontal)
                 // 日誌全文展開、整頁可滾動（不再用固定高度的框截斷下方日誌）
-                Text(log)
+                Text(logStore.summary)
                     .font(.system(.caption, design: .monospaced))
                     .frame(maxWidth: .infinity, minHeight: 200, alignment: .topLeading)
                     .padding()
@@ -200,7 +235,7 @@ struct ContentView: View {
                     .frame(height: 1)
                     .id("logBottom")
             }
-            .onChange(of: log) { _ in
+            .onChange(of: logStore.summary) { _ in
                 if autoScrollLog {
                     proxy.scrollTo("logBottom", anchor: .bottom)
                 }
@@ -213,7 +248,7 @@ struct ContentView: View {
                 // FORENSICS：註冊 idevice 鑑識紀錄橋（每筆交換即時進日誌畫面）
                 FxLogRelay.shared.handler = { msg in appendLog(msg) }
                 idevice_forensics_set_callback(ideviceForensicsLine)
-                appendLog("=== PROBE MATRIX（連線探針矩陣版）===")
+                appendLog("=== PROBE MATRIX + LOG UI（探針矩陣＋日誌分頁版）===")
                 // App 打開時，如果已有配對檔，自動啟動常駐心跳
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                 let pairingURL = docs.appendingPathComponent("PairingFiles/PairingFile_Lockdown.plist")
@@ -261,7 +296,7 @@ struct ContentView: View {
     }
     
     private func appendLog(_ msg: String) {
-        log += "[\(Date().formatted(date: .omitted, time: .standard))] \(msg)\n"
+        logStore.append(msg)
     }
     
     private func testVPN() {

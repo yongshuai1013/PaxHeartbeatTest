@@ -35,7 +35,7 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleShortVersionString: "0.1.0"
-        CFBundleVersion: "5"
+        CFBundleVersion: "6"
         UILaunchScreen: {}
         UIBackgroundModes:
           - audio
