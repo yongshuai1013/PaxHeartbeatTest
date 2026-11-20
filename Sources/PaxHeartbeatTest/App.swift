@@ -46,7 +46,7 @@ struct ContentView: View {
                 Text("PaxHeartbeatTest")
                     .font(.title)
                     .padding(.top)
-                Text("UPSTREAM 0.1.66 + FORENSICS")
+                Text("PROBE MATRIX")
                     .font(.caption)
                     .bold()
                     .foregroundColor(.red)
@@ -166,7 +166,19 @@ struct ContentView: View {
                         .cornerRadius(8)
                 }
                 .padding(.horizontal)
-                
+
+                // 7. 連線探針矩陣（原始 socket，繞開 idevice）
+                Button(action: runProbeMatrix) {
+                    Text("7. 連線探針矩陣")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.teal)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+                .padding(.horizontal)
+                .disabled(isTesting)
+
                 // 日誌輸出
                 HStack {
                     Text("日誌")
@@ -201,7 +213,7 @@ struct ContentView: View {
                 // FORENSICS：註冊 idevice 鑑識紀錄橋（每筆交換即時進日誌畫面）
                 FxLogRelay.shared.handler = { msg in appendLog(msg) }
                 idevice_forensics_set_callback(ideviceForensicsLine)
-                appendLog("=== UPSTREAM 0.1.66 + FORENSICS（源頭版鑑識）===")
+                appendLog("=== PROBE MATRIX（連線探針矩陣版）===")
                 // App 打開時，如果已有配對檔，自動啟動常駐心跳
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                 let pairingURL = docs.appendingPathComponent("PairingFiles/PairingFile_Lockdown.plist")
@@ -366,6 +378,19 @@ struct ContentView: View {
         }
     }
     
+    private func runProbeMatrix() {
+        guard !isTesting else { return }
+        isTesting = true
+        let host = deviceIP
+        appendLog("連線探針矩陣啟動（目標 \(host):62078）")
+        Task.detached {
+            ProbeMatrix.shared.run(host: host) { msg in
+                DispatchQueue.main.async { appendLog(msg) }
+            }
+            DispatchQueue.main.async { isTesting = false }
+        }
+    }
+
     private func dumpMISymbols() {
         guard !isTesting else { return }
         isTesting = true
