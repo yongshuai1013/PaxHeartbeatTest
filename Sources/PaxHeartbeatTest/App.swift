@@ -22,7 +22,7 @@ final class FxLogRelay {
 /// 日誌雙層儲存：full 收全量逐筆（一字不漏，詳細頁與匯出用）；
 /// summary 只收 App 自己的敘事行（主頁用）——按鈕操作、[％] 進度、✅/❌ 結論、
 /// 一句話結果（如「✅ minimuxer 模式 GetValue 成功：UDID …」）。
-/// 所有機器行（C／P／M／U 開頭的連線紀錄，不分 OPEN／X／>／<）一律只進 full：
+/// 所有機器行（C／P／M／U／E 開頭的連線紀錄，不分 OPEN／X／>／<）一律只進 full：
 /// idevice 重試永不停，機器行上主頁必淹版（用戶 2026-11-20 最終規格）。
 final class LogStore: ObservableObject {
     @Published private(set) var summary = ""
@@ -36,7 +36,7 @@ final class LogStore: ObservableObject {
         }
     }
 
-    /// 機器行一律不上主頁：C<n>（鑑識）／P<n>（探針）／M（minimuxer）／U（自研 usbmuxd）的連線紀錄
+    /// 機器行一律不上主頁：C<n>（鑑識）／P<n>（探針）／M（minimuxer）／U（自研 usbmuxd）／E（EMProxy）的連線紀錄
     /// 不分 OPEN／X／>／<／OK 全擋；探針的段標題（--- Pn …）與 PROBE MATRIX 起訖行
     /// 同屬機器輸出塊，一併擋下。其餘敘事行（操作／進度／✅❌／一句話結果）才進 summary。
     /// 註：minimuxer 的結論是以 ✅ 敘事行形式另發的，不以 M 開頭，照留主頁。
@@ -45,6 +45,9 @@ final class LogStore: ObservableObject {
             return false
         }
         if msg.hasPrefix("M ") {
+            return false
+        }
+        if msg.hasPrefix("E ") {
             return false
         }
         if msg.hasPrefix("U ") {
@@ -87,7 +90,7 @@ struct ContentView: View {
                 Text("PaxHeartbeatTest")
                     .font(.title)
                     .padding(.top)
-                Text("PROBE MATRIX + LOG UI + MINIMUXER + MINIMUXER INSTALL + SELF-USBMUXD")
+                Text("PROBE MATRIX + LOG UI + MINIMUXER + MINIMUXER INSTALL + SELF-USBMUXD + EMPROXY")
                     .font(.caption)
                     .bold()
                     .foregroundColor(.red)
@@ -256,6 +259,18 @@ struct ContentView: View {
                 .padding(.horizontal)
                 .disabled(isTesting)
 
+                // 11. EMProxy 宿主（toggle：啟動後保持運行，再按一次停止；EMProxy 由本 App 宿主）
+                Button(action: toggleEMProxy) {
+                    Text("11. 啟動 EMProxy")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.indigo)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+                .padding(.horizontal)
+                .disabled(isTesting)
+
                 // 詳細日誌入口（完整逐筆）
                 NavigationLink(destination: LogDetailView(store: logStore)) {
                     Text("詳細日誌（完整逐筆）")
@@ -301,7 +316,7 @@ struct ContentView: View {
                 // FORENSICS：註冊 idevice 鑑識紀錄橋（每筆交換即時進日誌畫面）
                 FxLogRelay.shared.handler = { msg in appendLog(msg) }
                 idevice_forensics_set_callback(ideviceForensicsLine)
-                appendLog("=== MINIMUXER + SELF-USBMUXD（自研 usbmuxd 試作版）===")
+                appendLog("=== MINIMUXER + SELF-USBMUXD + EMPROXY（自研 usbmuxd 試作版）===")
                 // App 打開時，如果已有配對檔，自動啟動常駐心跳
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                 let pairingURL = docs.appendingPathComponent("PairingFiles/PairingFile_Lockdown.plist")
@@ -527,6 +542,18 @@ struct ContentView: View {
         appendLog("minimuxer 模式啟動（0.6.4 本體連線層）")
         Task {
             await MinimuxerModeTester.shared.run { msg in
+                DispatchQueue.main.async { appendLog(msg) }
+            }
+            await MainActor.run { isTesting = false }
+        }
+    }
+
+    private func toggleEMProxy() {
+        guard !isTesting else { return }
+        isTesting = true
+        appendLog(EMProxyController.shared.isRunning ? "EMProxy 停止（測試 App 宿主）" : "EMProxy 啟動（測試 App 宿主，綁 127.0.0.1:51820）")
+        Task {
+            await EMProxyController.shared.toggle { msg in
                 DispatchQueue.main.async { appendLog(msg) }
             }
             await MainActor.run { isTesting = false }
