@@ -35,6 +35,13 @@ public class AppInstaller {
                 try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
             } else {
                 try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                // 解壓前先清目的地（2026-11-21 09:43 撞名場）：ZIPFoundation 的 extract
+                // 遇到目的地已存在會直接拋 fileWriteFileExists——同一路徑在前面迴圈已落地
+                // （重複 entry、或先被建出的同名目錄，如 SideStore.app/AltStore.momd）即整場
+                // 死在本地解壓、連裝置連線都沒發起。先刪已存在的目的地再解。
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try? FileManager.default.removeItem(at: dest)
+                }
                 _ = try archive.extract(entry, to: dest)
             }
         }
