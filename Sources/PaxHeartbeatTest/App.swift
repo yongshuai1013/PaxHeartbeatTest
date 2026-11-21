@@ -36,7 +36,7 @@ final class LogStore: ObservableObject {
         }
     }
 
-    /// 機器行一律不上主頁：C<n>（鑑識）／P<n>（探針）／M（minimuxer）／U（自研 usbmuxd）／E（EMProxy）的連線紀錄
+    /// 機器行一律不上主頁：C<n>（鑑識）／P<n>（探針）／M（minimuxer）／U（自研 usbmuxd）／E（EMProxy）／N（外部 muxer 探測）的連線紀錄
     /// 不分 OPEN／X／>／<／OK 全擋；探針的段標題（--- Pn …）與 PROBE MATRIX 起訖行
     /// 同屬機器輸出塊，一併擋下。其餘敘事行（操作／進度／✅❌／一句話結果）才進 summary。
     /// 註：minimuxer 的結論是以 ✅ 敘事行形式另發的，不以 M 開頭，照留主頁。
@@ -51,6 +51,9 @@ final class LogStore: ObservableObject {
             return false
         }
         if msg.hasPrefix("U ") {
+            return false
+        }
+        if msg.hasPrefix("N ") {
             return false
         }
         if msg.range(of: "^--- P[0-9]+ ", options: .regularExpression) != nil {
@@ -90,7 +93,7 @@ struct ContentView: View {
                 Text("PaxHeartbeatTest")
                     .font(.title)
                     .padding(.top)
-                Text("PROBE MATRIX + LOG UI + MINIMUXER + MINIMUXER INSTALL + SELF-USBMUXD + EMPROXY")
+                Text("PROBE MATRIX + LOG UI + MINIMUXER + MINIMUXER INSTALL + SELF-USBMUXD + EMPROXY + EXTMUXER")
                     .font(.caption)
                     .bold()
                     .foregroundColor(.red)
@@ -271,6 +274,18 @@ struct ContentView: View {
                 .padding(.horizontal)
                 .disabled(isTesting)
 
+                // 12. 外部 muxer 探測（探 127.0.0.1:27015 的 usbmuxd 服務——牛蛙 NBCoreText 含 usbmuxd listener 符號，疑在本機開服務）
+                Button(action: probeExternalMuxer) {
+                    Text("12. 探測外部 muxer")
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.teal)
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                }
+                .padding(.horizontal)
+                .disabled(isTesting)
+
                 // 詳細日誌入口（完整逐筆）
                 NavigationLink(destination: LogDetailView(store: logStore)) {
                     Text("詳細日誌（完整逐筆）")
@@ -316,7 +331,7 @@ struct ContentView: View {
                 // FORENSICS：註冊 idevice 鑑識紀錄橋（每筆交換即時進日誌畫面）
                 FxLogRelay.shared.handler = { msg in appendLog(msg) }
                 idevice_forensics_set_callback(ideviceForensicsLine)
-                appendLog("=== MINIMUXER + SELF-USBMUXD + EMPROXY（自研 usbmuxd 試作版）===")
+                appendLog("=== MINIMUXER + SELF-USBMUXD + EMPROXY + EXTMUXER（外部 muxer 探測版）===")
                 // App 打開時，如果已有配對檔，自動啟動常駐心跳
                 let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
                 let pairingURL = docs.appendingPathComponent("PairingFiles/PairingFile_Lockdown.plist")
@@ -568,6 +583,19 @@ struct ContentView: View {
                 DispatchQueue.main.async { appendLog(msg) }
             }
             await MainActor.run { isTesting = false }
+        }
+    }
+
+    private func probeExternalMuxer() {
+        guard !isTesting else { return }
+        isTesting = true
+        let host = deviceIP
+        appendLog("外部 muxer 探測啟動（127.0.0.1:27015 的 usbmuxd 服務；對照直連 \(host):62078）")
+        Task.detached {
+            ExternalMuxerProbe.shared.run(directHost: host) { msg in
+                DispatchQueue.main.async { appendLog(msg) }
+            }
+            DispatchQueue.main.async { isTesting = false }
         }
     }
 
