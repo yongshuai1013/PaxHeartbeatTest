@@ -335,6 +335,17 @@ struct ContentView: View {
                         }
                     }
                 }
+                // EMProxy 自動復活：上次開啟狀態還在（UserDefaults 旗標）且未運行時，
+                // 照按鈕 11 同一序列自動拉起（照 0.6.4 本體 AppBootManager——EMProxy
+                // 宿主跟著 App 行程生死，行程重啟後靠旗標復活，不必再手按按鈕 11）
+                if EMProxyController.desiredOn && !EMProxyController.shared.isRunning {
+                    appendLog("EMProxy 自動啟動（恢復上次開啟狀態）")
+                    Task {
+                        await EMProxyController.shared.autoStartIfDesired { msg in
+                            DispatchQueue.main.async { appendLog(msg) }
+                        }
+                    }
+                }
             }
             .sheet(isPresented: $showIPAPicker) {
                 DocumentPicker(contentTypes: [.data]) { url in
