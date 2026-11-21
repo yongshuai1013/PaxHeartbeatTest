@@ -68,10 +68,15 @@ final class EMProxyController {
         await mm.core.bindConnectionConfig(binding)
         log("E < bind done @\(ms())ms")
 
-        // handshake client：照本體 startEMProxy——peer 為隧道對端（裝置），埠 62078（muxer）
-        let peerIp = reportedPeerIp ?? ""
-        log("E > setHandshakeClient host=\(peerIp) port=62078 enabled=\(!peerIp.isEmpty)")
-        mm.emproxy.setHandshakeClient(host: peerIp, port: 62078, enabled: !peerIp.isEmpty)
+        // handshake client：peer 為隧道對端（裝置），埠 62078（muxer）。
+        // binding 的 peer 來自介面掃描：WireGuard 介面沒有 LocalDevVPN 那種 peer 位址、
+        // 掃描會落空（真機兩場實證）——掃不到就照本體預設 10.7.0.1 兜底
+        // （0.6.4 本體 AppConstants.Connection.defaultOverrideIP），enabled 一律 true。
+        let scannedPeer = reportedPeerIp ?? ""
+        let peerIp = scannedPeer.isEmpty ? "10.7.0.1" : scannedPeer
+        let peerSrc = scannedPeer.isEmpty ? "fallback" : "scan"
+        log("E > setHandshakeClient host=\(peerIp) port=62078 enabled=true src=\(peerSrc)")
+        mm.emproxy.setHandshakeClient(host: peerIp, port: 62078, enabled: true)
 
         // EMProxy 本體啟動：綁 127.0.0.1:51820（本體 AppConstants.Proxy.serverURL）
         log("E > start host=127.0.0.1 port=51820")
